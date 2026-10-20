@@ -7,12 +7,13 @@ Single-page tracker (`public/index.html`) with Vercel serverless functions (`api
 1. Create the Vercel project from this folder (GitHub import or `vercel` CLI). Framework preset: **Other**.
 2. In the project, go to **Storage → Neon** and create or connect a database. This sets `DATABASE_URL`.
 3. Add the env var `SESSION_SECRET` (32+ random characters, e.g. `openssl rand -base64 48`).
-4. Open the Neon SQL Editor and run `db/setup.sql`. It creates the tables and loads:
-   - users `alan`, `karl` and `peds` (admins, same passwords as the old tracker)
+4. Nothing to run by hand: on the first request the app creates its tables and, if the database is empty, loads
+   - admins `alan`, `karl`, `peds` (see lib/seed.js — change these passwords in Manage Users after first sign-in)
    - the October 2026 sheet: 30 batches, 129 employees
+   (`db/setup.sql` does the same if you'd rather run it in the Neon SQL Editor.)
 5. Deploy and sign in.
 
-`db/setup.sql` contains password hashes and payroll data, so keep the repo private.
+`lib/seed.js` and `db/setup.sql` contain password hashes and payroll data, so keep the repo private.
 
 ## How data is stored
 
