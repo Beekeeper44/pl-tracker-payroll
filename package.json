@@ -1,0 +1,10 @@
+{
+  "name": "pl-payroll-tracker",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "bcryptjs": "^2.4.3"
+  }
+}
