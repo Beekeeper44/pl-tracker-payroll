@@ -2536,12 +2536,14 @@ async function __saveFile(filename, blob){
 
     <div class="users-section">
       <div class="users-section-title"><span class="bv-num">2</span> Download</div>
+      <div class="export-csv-hint"><strong>Download sheet (.xlsx)</strong> keeps the sheet's colors, fonts, filters, frozen columns and live formulas — open it in Google Sheets (File → Import) or Excel. <strong>CSV only</strong> has the same cells but no formatting (CSV files can't hold colors).</div>
       <div class="export-csv-hint">Columns A–BR exactly like the sheet: code, #, name, position, batch, Fixed, Internet, the 9 variables, Variables before OT &amp; holiday, Holiday Date / Pay, 1.5× Mult., 1st–31st, OT / Variables / GRAND TOTAL, and the Summary – Sanity Check columns. Then the TOTAL row and the A. TOTAL SUMMARY block.</div>
     </div>
 
     <div class="modal-actions">
       <button class="btn" onclick="closeExportCsv()">Cancel</button>
-      <button class="btn btn-primary export-csv-go" onclick="exportCSV()">Download CSV</button>
+      <button class="btn" onclick="exportCSV()" title="Plain CSV — values only, no colors">CSV only</button>
+      <button class="btn btn-primary export-csv-go" onclick="exportSheetXLSX()">Download sheet (.xlsx)</button>
     </div>
   </div>
 </div>
@@ -5641,7 +5643,7 @@ function buildSheetCsvRows() {
 
   return {
     rows: [title, month, blank(), totals, groups, header, ...body, blank(), blank(), totalRow, blank(), blank(), ...summaryLines],
-    matched: m.matched, extra: m.extra.length,
+    matched: m.matched, extra: m.extra.length, bodyCount: body.length, summaryCount: summaryLines.length,
   };
 }
 
@@ -5660,6 +5662,167 @@ async function exportCSV() {
   } catch (err) {
     console.error('CSV export failed:', err);
     showToast('CSV export failed: ' + err.message, 'error');
+  }
+}
+
+// ============ EXPORT .XLSX — same cells as the CSV, styled like the payroll Google Sheet ============
+async function exportSheetXLSX() {
+  try {
+    if (typeof ExcelJS === 'undefined') { showToast('Excel library still loading — try again in a second', 'error'); return; }
+    if (!exportOrder) await loadExportOrder();
+    const d = buildSheetCsvRows();
+    const L = n => { let s = ''; n++; while (n) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
+    const C = colIdx;
+    const HEADER = 6, FIRST = 7, LAST = 6 + d.bodyCount;
+    const TOTAL = LAST + 3, SUM0 = TOTAL + 3;   // first row of "A. TOTAL SUMMARY"
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'PL Payroll Tracker';
+    const ws = wb.addWorksheet(`REF ${MONTH_NAMES_SHORT[currentMonth]} ${currentYear}`, {
+      views: [{ state: 'frozen', xSplit: 8, ySplit: HEADER, showGridLines: true }],
+      properties: { defaultRowHeight: 13 },
+    });
+    d.rows.forEach((r, i) => r.forEach((v, c) => { if (v !== '' && v != null) ws.getCell(i + 1, c + 1).value = v; }));
+
+    // ---- palette (taken from the sheet) ----
+    const BLUE = 'FF1155CC', RED = 'FFFF0000', GREY = 'FF999999', BORDER = 'FFBFBFBF';
+    const FILL_ORANGE = 'FFFFF2CC', FILL_BLUE = 'FFDDEBF7', FILL_YELLOW = 'FFFFFF00', FILL_MONTH = 'FFDDEBF7';
+    const fill = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+    const thin = { style: 'thin', color: { argb: BORDER } };
+    const box = { top: thin, left: thin, bottom: thin, right: thin };
+    const ACC0 = '_(* #,##0_);_(* (#,##0);_(* "-"_);_(@_)';
+    const ACC2 = '_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)';
+    const font = (extra = {}) => ({ name: 'Arial', size: 9, ...extra });
+
+    // ---- column widths ----
+    const widths = { A: 3, B: 13, C: 5, D: 27, E: 17, F: 8, G: 11, H: 10, R: 10, S: 3, T: 11, U: 10, V: 10, BB: 12, BC: 12, BD: 13, BE: 3, BF: 3, BG: 3, BH: 32 };
+    for (let c = 0; c <= C('BR'); c++) {
+      const l = L(c);
+      ws.getColumn(c + 1).width = widths[l] ?? (c >= C('I') && c <= C('Q') ? 9 : c >= C('W') && c <= C('BA') ? 6.5 : c >= C('BI') ? 12 : 10);
+    }
+
+    // ---- rows 1–2 ----
+    ws.getCell('B1').font = { name: 'Arial', size: 14, bold: true };
+    ws.getCell('B2').font = { name: 'Arial', size: 12, bold: true };
+    ws.getCell('D2').font = font({ bold: true, color: { argb: RED } });
+    ws.getCell('D2').fill = fill(FILL_MONTH);
+    ws.getCell('BH1').font = font({ bold: true, size: 11 });
+
+    // ---- row 4: column totals (small grey) ----
+    const totalsCols = [];
+    for (let c = C('I'); c <= C('Q'); c++) totalsCols.push(c);
+    totalsCols.push(C('U'), C('V'));
+    for (let c = C('W'); c <= C('BC'); c++) totalsCols.push(c);
+    totalsCols.forEach(c => {
+      const cell = ws.getCell(4, c + 1);
+      cell.value = { formula: `SUM(${L(c)}${FIRST}:${L(c)}${LAST})`, result: cell.value ?? 0 };
+      cell.font = font({ italic: true, color: { argb: GREY }, size: 8 });
+      cell.numFmt = c === C('V') ? '#,##0.00' : ACC0;
+    });
+
+    // ---- row 5: group labels ----
+    ws.getCell('I5').font = font({ italic: true, color: { argb: RED } });
+    ws.mergeCells('T5:U5');
+    ws.getCell('T5').font = font({ bold: true, italic: true, color: { argb: BLUE } });
+    ws.getCell('T5').alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    ['V5', 'W5', 'BB5'].forEach(a => { ws.getCell(a).font = font({ bold: true, italic: true }); });
+    ws.getRow(5).height = 26;
+
+    // ---- row 6: headers ----
+    const hr = ws.getRow(HEADER);
+    hr.height = 92;
+    for (let c = C('B'); c <= C('BR'); c++) {
+      if (c >= C('BE') && c <= C('BG')) continue;
+      const cell = hr.getCell(c + 1);
+      cell.font = font({ bold: true });
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = box;
+    }
+    hr.getCell(C('I') + 1).font = font({ bold: true, color: { argb: RED } });
+    hr.getCell(C('L') + 1).font = font({ bold: true, color: { argb: RED } });
+    hr.getCell(C('R') + 1).fill = fill(FILL_YELLOW);
+    hr.getCell(C('T') + 1).font = font({ bold: true, color: { argb: BLUE } });
+
+    // ---- employee rows ----
+    for (let r = FIRST; r <= LAST; r++) {
+      const row = ws.getRow(r);
+      const f = (col, formula) => { const cell = row.getCell(C(col) + 1); cell.value = { formula, result: typeof cell.value === 'number' ? cell.value : 0 }; };
+      f('R', `SUM(J${r}:Q${r})-I${r}`);
+      f('BB', `SUM(W${r}:BA${r})`);
+      f('BC', `R${r}+U${r}`);
+      f('BD', `G${r}+H${r}+BB${r}+BC${r}`);
+      f('BM', `U${r}`); f('BN', `BB${r}`); f('BO', `BC${r}`); f('BP', `BD${r}`);
+      f('BR', `(BP${r}-BQ${r})/2`);
+
+      for (let c = C('B'); c <= C('BR'); c++) {
+        if (c >= C('BE') && c <= C('BG')) continue;
+        const cell = row.getCell(c + 1);
+        cell.font = font();
+        cell.border = box;
+        if (c >= C('G') && c !== C('T') && !(c >= C('BH') && c <= C('BH'))) cell.numFmt = ACC0;
+      }
+      row.getCell(C('B') + 1).font = font({ bold: true, color: { argb: BLUE } });
+      row.getCell(C('C') + 1).alignment = { horizontal: 'right' };
+      row.getCell(C('E') + 1).font = font({ size: 8 });
+      row.getCell(C('F') + 1).font = font({ size: 8 });
+      row.getCell(C('F') + 1).alignment = { horizontal: 'center' };
+      [C('I'), C('L')].forEach(c => { row.getCell(c + 1).fill = fill(FILL_ORANGE); });
+      [C('J'), C('K'), C('M'), C('N'), C('O'), C('P'), C('Q')].forEach(c => { row.getCell(c + 1).fill = fill(FILL_BLUE); });
+      row.getCell(C('R') + 1).alignment = { horizontal: 'center' };
+      row.getCell(C('U') + 1).fill = fill(FILL_ORANGE);
+      row.getCell(C('U') + 1).numFmt = ACC2;
+      row.getCell(C('V') + 1).font = font({ color: { argb: BLUE } });
+      row.getCell(C('V') + 1).numFmt = '#,##0.00';
+      for (let c = C('W'); c <= C('BA'); c++) { const cell = row.getCell(c + 1); cell.fill = fill(FILL_BLUE); cell.numFmt = '#,##0.00;-#,##0.00;""'; }
+      [C('BB'), C('BC'), C('BD'), C('BM'), C('BN'), C('BO')].forEach(c => { row.getCell(c + 1).numFmt = ACC0; });
+      row.getCell(C('BD') + 1).font = font({ bold: true });
+      row.getCell(C('BP') + 1).numFmt = ACC2;
+    }
+
+    // ---- TOTAL row ----
+    const tr = ws.getRow(TOTAL);
+    const sumCols = [];
+    for (let c = C('G'); c <= C('R'); c++) sumCols.push(c);
+    sumCols.push(C('U'));
+    for (let c = C('W'); c <= C('BD'); c++) sumCols.push(c);
+    for (let c = C('BK'); c <= C('BR'); c++) sumCols.push(c);
+    sumCols.forEach(c => {
+      const cell = tr.getCell(c + 1);
+      cell.value = { formula: `SUM(${L(c)}${FIRST}:${L(c)}${LAST})`, result: typeof cell.value === 'number' ? cell.value : 0 };
+      cell.numFmt = c === C('BD') || c === C('BP') || c === C('BR') ? ACC2 : ACC0;
+      cell.font = font({ bold: true });
+      cell.border = { top: { style: 'thin', color: { argb: 'FF000000' } }, bottom: { style: 'double', color: { argb: 'FF000000' } } };
+    });
+    [C('E'), C('BH')].forEach(c => { tr.getCell(c + 1).font = font({ bold: true }); });
+
+    // ---- A. TOTAL SUMMARY ----
+    const S = i => SUM0 + i;        // row of summary line i (0 = title)
+    const E = (i, formula) => { const cell = ws.getCell(`E${S(i)}`); cell.value = { formula, result: typeof cell.value === 'number' ? cell.value : 0 }; cell.numFmt = ACC2; };
+    E(1, `G${TOTAL}`); E(2, `H${TOTAL}`); E(3, `L${TOTAL}`); E(4, `J${TOTAL}`); E(5, `K${TOTAL}`);
+    E(6, `M${TOTAL}`); E(7, `N${TOTAL}`); E(8, `O${TOTAL}`); E(9, `P${TOTAL}`); E(10, `Q${TOTAL}`);
+    E(11, `U${TOTAL}`); E(12, `BB${TOTAL}`); E(13, `SUM(E${S(1)}:E${S(12)})`); E(14, `I${TOTAL}`); E(15, `E${S(13)}-E${S(14)}`);
+    const I = (i, formula) => { const cell = ws.getCell(`I${S(i)}`); cell.value = { formula, result: typeof cell.value === 'number' ? cell.value : 0 }; cell.numFmt = ACC2; };
+    I(2, `E${S(3)}`); I(3, `E${S(12)}`); I(4, `E${S(11)}`);
+    I(5, `E${S(4)}+E${S(5)}+E${S(6)}+E${S(7)}+E${S(8)}+E${S(9)}+E${S(10)}`);
+    I(6, `SUM(I${S(2)}:I${S(5)})`); I(7, `I${TOTAL}`); I(8, `E${S(1)}+E${S(2)}`);
+    for (let i = 0; i < d.summaryCount; i++) {
+      ws.getCell(`D${S(i)}`).font = font({ bold: [0, 13, 15].includes(i) });
+      ws.getCell(`E${S(i)}`).font = font({ bold: [13, 15].includes(i) });
+      ['G', 'H', 'I'].forEach(c => { ws.getCell(`${c}${S(i)}`).font = font({ bold: c !== 'I' }); });
+    }
+    ws.getCell(`E${S(15)}`).border = { top: { style: 'thin' }, bottom: { style: 'double' } };
+
+    // filters on the header row, like the sheet
+    ws.autoFilter = { from: { row: HEADER, column: C('A') + 1 }, to: { row: LAST, column: C('BD') + 1 } };
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    await __saveFile(`payroll-${MONTH_LABEL.toLowerCase()}-${currentYear}.xlsx`, blob);
+    closeExportCsv();
+    showToast(`Sheet exported${d.extra ? ` · ${d.extra} new to the sheet` : ''}`, 'success');
+  } catch (err) {
+    console.error('Sheet export failed:', err);
+    showToast('Export failed: ' + err.message, 'error');
   }
 }
 
