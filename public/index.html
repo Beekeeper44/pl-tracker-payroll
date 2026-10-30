@@ -2336,6 +2336,20 @@ tbody tr.search-hidden { display: none; }
 .users-modal .mult-ref-who-batch { font-size: 12px; font-weight: 600; }
 .users-modal .mult-ref-who-mult { text-align: right; font-family: 'IBM Plex Mono', monospace; font-weight: 700; }
 .users-modal .mult-ref-who-mult em { font-style: normal; font-size: 10px; font-weight: 700; text-transform: uppercase; background: #fef3c7; color: #92400e; padding: 1px 6px; border-radius: 999px; margin-left: 4px; }
+
+/* ==== Export CSV modal ==== */
+.users-modal.export-csv-modal { max-width: 720px !important; width: min(720px, 95vw); }
+.export-csv-modal .export-csv-status { font-size: 14px; color: #000; line-height: 1.5; padding: 12px 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--bg-soft); }
+.export-csv-modal .export-csv-muted { color: var(--ink-2); font-size: 12px; }
+.export-csv-modal .export-csv-warn { margin-top: 6px; font-size: 12.5px; color: #92400e; }
+.export-csv-modal .export-csv-warn-inline { color: #92400e; }
+.export-csv-modal .export-csv-toggle { display: inline-block; margin-top: 10px; color: #000; text-decoration: underline; }
+.export-csv-modal .export-csv-hint { font-size: 13px; color: #000; line-height: 1.45; margin: 10px 0 8px; }
+.export-csv-modal .export-csv-textarea { width: 100%; box-sizing: border-box; min-height: 180px; padding: 10px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; border: 1.5px solid var(--rule); border-radius: 8px; background: var(--bg); color: var(--ink); resize: vertical; }
+.export-csv-modal .export-csv-textarea:focus { outline: none; border-color: var(--ink); }
+.export-csv-modal .export-csv-preview { font-size: 13px; margin: 8px 0 10px; color: #000; min-height: 18px; }
+.export-csv-modal .export-csv-go { border-radius: 999px !important; padding-left: 26px; padding-right: 26px; background: #16a34a; border-color: #16a34a; color: #fff; }
+.export-csv-modal .export-csv-go:hover { background: #15803d; border-color: #15803d; }
 </style>
 <script>
 async function __saveFile(filename, blob){
@@ -2402,7 +2416,7 @@ async function __saveFile(filename, blob){
         <button class="btn btn-bulk" onclick="openBulkHours()">Paste All Hours</button>
         <button class="btn btn-bulk" onclick="openBulkVar()">Bulk Edit Variable</button>
         <button class="btn btn-clear" onclick="handleClearSheets()">Clear Sheets</button>
-        <button class="btn" onclick="exportCSV()">Export CSV</button>
+        <button class="btn" onclick="openExportCsv()">Export CSV</button>
         <button class="btn" onclick="exportXLSX()">Export Excel</button>
         <button class="btn" onclick="copyForSheets()" title="Copy as tab-separated text — paste directly into Google Sheets">Copy for Sheets</button>
         <button class="btn btn-primary" onclick="window.print()">Print</button>
@@ -2498,6 +2512,36 @@ async function __saveFile(filename, blob){
       </div>
     <div class="modal-actions">
       <button class="btn btn-primary mult-ref-done" onclick="toggleMultRef(false)">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Export CSV in the payroll Google Sheet layout -->
+<div class="modal-backdrop" id="exportCsvModal" onclick="if (event.target.id === 'exportCsvModal') closeExportCsv()">
+  <div class="modal users-modal export-csv-modal">
+    <h2>Export CSV</h2>
+    <div class="modal-sub">Same layout as the payroll Google Sheet · rows in the sheet's order</div>
+
+    <div class="users-section">
+      <div class="users-section-title"><span class="bv-num">1</span> Row order</div>
+      <div class="export-csv-status" id="exportCsvStatus">Loading…</div>
+      <button type="button" class="bv-link export-csv-toggle" onclick="toggleExportOrderEditor()">Update sheet row order</button>
+      <div id="exportOrderEditor" style="display:none;">
+        <div class="export-csv-hint">In the Google Sheet, select columns <strong>B to D</strong> (code, #, Employee Name) for every employee row and paste here — or just the Employee Name column. Names are matched loosely: cut-off names, "LAST, FIRST" vs "FIRST LAST", JR., and Ñ all work.</div>
+        <textarea id="exportOrderText" class="export-csv-textarea" placeholder="ROSEMARIE LIZARDO CRUCILLO&#10;MARCO LEANDRO SUAREZ CLARIN&#10;PADRINAO, JAN RAYMOND HUELGAS&#10;…" oninput="previewExportOrder()"></textarea>
+        <div class="export-csv-preview" id="exportOrderPreview"></div>
+        <button type="button" class="btn" id="exportOrderSaveBtn" onclick="saveExportOrder()">Save order</button>
+      </div>
+    </div>
+
+    <div class="users-section">
+      <div class="users-section-title"><span class="bv-num">2</span> Download</div>
+      <div class="export-csv-hint">Columns A–BR exactly like the sheet: code, #, name, position, batch, Fixed, Internet, the 9 variables, Variables before OT &amp; holiday, Holiday Date / Pay, 1.5× Mult., 1st–31st, OT / Variables / GRAND TOTAL, and the Summary – Sanity Check columns. Then the TOTAL row and the A. TOTAL SUMMARY block.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeExportCsv()">Cancel</button>
+      <button class="btn btn-primary export-csv-go" onclick="exportCSV()">Download CSV</button>
     </div>
   </div>
 </div>
@@ -5299,16 +5343,320 @@ async function copyForSheets() {
   }
 }
 
+// ============ EXPORT CSV — payroll Google Sheet layout (columns A–BR) ============
+let exportOrder = null;          // [{ code, name }] in the Google Sheet's row order
+let exportOrderMeta = null;
+
+const stripAccents = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+function sheetNameTokens(name) {
+  return stripAccents(name).toUpperCase()
+    .replace(/\b(JR|SR|II|III|IV)\b\.?/g, ' ')
+    .replace(/[^A-Z\s]/g, ' ')
+    .split(/\s+/).filter(Boolean);
+}
+
+// Share of name words that line up (a cut-off word counts if it's the start of a word).
+function sheetNameScore(a, b) {
+  const ta = sheetNameTokens(a), tb = sheetNameTokens(b);
+  if (!ta.length || !tb.length) return 0;
+  const used = new Set();
+  let hits = 0;
+  ta.forEach(x => {
+    const j = tb.findIndex((y, k) => !used.has(k) && (y === x || (x.length >= 2 && y.startsWith(x)) || (y.length >= 2 && x.startsWith(y))));
+    if (j >= 0) { used.add(j); hits++; }
+  });
+  return hits / Math.max(ta.length, tb.length);
+}
+
+// Code for someone not in the sheet yet: "ROSEMARIE LIZARDO CRUCILLO" → CRUCILLO.R, "DE JESUS, RAMY" → DEJESUS.R
+function sheetCode(name) {
+  const n = stripAccents(name).toUpperCase().trim();
+  let last, first;
+  if (n.includes(',')) {
+    const i = n.indexOf(',');
+    last = n.slice(0, i); first = n.slice(i + 1).trim().split(/\s+/)[0] || '';
+  } else {
+    const parts = n.split(/\s+/).filter(Boolean);
+    last = parts[parts.length - 1] || ''; first = parts[0] || '';
+  }
+  last = last.replace(/\b(JR|SR|II|III|IV)\b\.?/g, '').replace(/[^A-Z]/g, '');
+  return last + (first ? '.' + first[0] : '');
+}
+
+const orderEntry = e => (typeof e === 'string' ? { name: e, code: '' } : { name: e.name || '', code: e.code || '' });
+
+// Match sheet rows to app rows (best matches first, each used once). App employees missing
+// from the sheet are slotted in right after the last sheet row of their own batch.
+function matchSheetOrder(entries, rows) {
+  const list = (entries || []).map(orderEntry);
+  const pairs = [];
+  list.forEach((e, i) => rows.forEach((r, j) => {
+    const sc = sheetNameScore(e.name, r.row.name);
+    if (sc >= 0.6) pairs.push({ i, j, sc });
+  }));
+  pairs.sort((x, y) => y.sc - x.sc || x.i - y.i);
+  const byEntry = new Map(), usedRow = new Set();
+  pairs.forEach(p => { if (!byEntry.has(p.i) && !usedRow.has(p.j)) { byEntry.set(p.i, p.j); usedRow.add(p.j); } });
+
+  const ordered = [];
+  list.forEach((e, i) => {
+    if (byEntry.has(i)) ordered.push({ ...rows[byEntry.get(i)], code: e.code || sheetCode(rows[byEntry.get(i)].row.name), inSheet: true });
+  });
+  const extra = rows.filter((_, j) => !usedRow.has(j)).map(r => ({ ...r, code: sheetCode(r.row.name), inSheet: false }));
+  extra.forEach(x => {
+    let at = -1;
+    ordered.forEach((o, k) => { if (o.batch.id === x.batch.id) at = k; });
+    if (at < 0) {
+      // no one from this batch in the sheet: put it after the closest earlier batch
+      const bIdx = batches.findIndex(b => b.id === x.batch.id);
+      ordered.forEach((o, k) => { if (batches.findIndex(b => b.id === o.batch.id) <= bIdx) at = k; });
+    }
+    ordered.splice(at + 1, 0, x);
+  });
+  return { ordered, matched: byEntry.size, extra, missing: list.filter((_, i) => !byEntry.has(i)) };
+}
+
+function allExportRows() {
+  const out = [];
+  batches.forEach(b => b.rows.forEach(row => out.push({ row, batch: b })));
+  return out;
+}
+
+async function loadExportOrder(force = false) {
+  if (exportOrder && !force) return exportOrder;
+  try {
+    const r = await api('/api/settings?key=export_order');
+    exportOrder = Array.isArray(r.value) ? r.value.map(orderEntry) : [];
+    exportOrderMeta = r;
+  } catch { exportOrder = exportOrder || []; }
+  return exportOrder;
+}
+
+// Accepts the sheet's columns B:D (code, #, name) or just the name column.
+function parsePastedOrder(text) {
+  return String(text || '').split(/\r?\n/).map(line => {
+    const cells = line.split('\t').map(c => c.trim()).filter(Boolean);
+    const name = cells.filter(c => /[A-Za-zÑñ]{2,}/.test(c) && /\s|,/.test(c)).sort((x, y) => y.length - x.length)[0]
+      || cells.find(c => /[A-Za-zÑñ]{2,}/.test(c)) || '';
+    const code = cells.find(c => c !== name && /^[A-ZÑ.\-]+$/i.test(c) && (/\./.test(c) || /^X+$/i.test(c))) || '';
+    return { name, code: code.toUpperCase() };
+  }).filter(e => e.name && !/^employee name$/i.test(e.name));
+}
+
+async function openExportCsv() {
+  document.getElementById('exportCsvModal').classList.add('show');
+  document.getElementById('exportOrderEditor').style.display = 'none';
+  document.getElementById('exportCsvStatus').textContent = 'Loading…';
+  await loadExportOrder(true);
+  renderExportCsvStatus();
+}
+
+function closeExportCsv() {
+  document.getElementById('exportCsvModal').classList.remove('show');
+}
+
+function renderExportCsvStatus() {
+  const m = matchSheetOrder(exportOrder || [], allExportRows());
+  const el = document.getElementById('exportCsvStatus');
+  el.innerHTML = `
+    <div><strong>${m.matched}</strong> of ${m.ordered.length} employees matched to the sheet's rows and codes${exportOrderMeta?.updatedBy ? ` <span class="export-csv-muted">(order saved by ${escapeHtml(exportOrderMeta.updatedBy)})</span>` : ''}.</div>
+    ${m.extra.length ? `<div class="export-csv-warn">${m.extra.length} not in the sheet yet — placed at the end of their batch with a new code: ${escapeHtml(m.extra.slice(0, 6).map(x => `${x.row.name} (${x.code})`).join('; '))}${m.extra.length > 6 ? '…' : ''}</div>` : ''}
+    ${m.missing.length ? `<div class="export-csv-warn">${m.missing.length} sheet row${m.missing.length === 1 ? '' : 's'} not found in the app (left out): ${escapeHtml(m.missing.slice(0, 6).map(e => e.name).join('; '))}${m.missing.length > 6 ? '…' : ''}</div>` : ''}`;
+}
+
+function toggleExportOrderEditor() {
+  const ed = document.getElementById('exportOrderEditor');
+  const open = ed.style.display === 'none';
+  ed.style.display = open ? '' : 'none';
+  if (open) {
+    const ta = document.getElementById('exportOrderText');
+    if (!ta.value) ta.value = (exportOrder || []).map(e => (e.code ? e.code + '\t' : '') + e.name).join('\n');
+    previewExportOrder();
+    ta.focus();
+  }
+}
+
+function previewExportOrder() {
+  const entries = parsePastedOrder(document.getElementById('exportOrderText').value);
+  const m = matchSheetOrder(entries, allExportRows());
+  const withCode = entries.filter(e => e.code).length;
+  document.getElementById('exportOrderPreview').innerHTML = entries.length
+    ? `${entries.length} rows (${withCode} with codes) · <strong>${m.matched}</strong> matched${m.missing.length ? ` · <span class="export-csv-warn-inline">${m.missing.length} not found: ${escapeHtml(m.missing.slice(0, 4).map(e => e.name).join('; '))}${m.missing.length > 4 ? '…' : ''}</span>` : ''}`
+    : '';
+}
+
+async function saveExportOrder() {
+  const entries = parsePastedOrder(document.getElementById('exportOrderText').value);
+  if (!entries.length) { showToast('Paste columns B:D (or the Employee Name column) first', 'error'); return; }
+  try {
+    await api('/api/settings', { method: 'PUT', body: { key: 'export_order', value: entries } });
+    exportOrder = entries;
+    exportOrderMeta = { updatedBy: currentUser?.displayName || currentUser?.username };
+    document.getElementById('exportOrderEditor').style.display = 'none';
+    renderExportCsvStatus();
+    showToast(`Saved sheet order (${entries.length} rows)`, 'success');
+  } catch (err) {
+    showToast('Could not save order: ' + err.message, 'error');
+  }
+}
+
+function ordinalDay(d) {
+  const s = (d % 100 >= 11 && d % 100 <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[d % 10] || 'th');
+  return d + s;
+}
+
+// Spreadsheet column letter → 0-based index (A → 0, BR → 69)
+function colIdx(letters) {
+  return letters.split('').reduce((n, ch) => n * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
+}
+
+function buildSheetCsvRows() {
+  const W = colIdx('BR') + 1;
+  const blank = () => Array(W).fill('');
+  const C = colIdx;
+  const r2 = v => Math.round(v * 100) / 100;
+  const input = v => { const n = parseNum(v); return n ? r2(n) : ''; };   // typed values: blank when empty
+  const calc = v => r2(parseNum(v));                                       // formulas: 0 shows as "-" in the sheet
+  const BONUS_KEYS = ['specialTask', 'trainerAllow', 'nightDiff', 'teamLead', 'referral', 'compingBonus', 'plTeamPerf', 'perfBonus'];
+  const VAR_COLS = ['absences', ...BONUS_KEYS];                          // I..Q
+  const periodTag = `${MONTH_NAMES_SHORT[currentMonth]} ${currentYear}`;
+  const m = matchSheetOrder(exportOrder || [], allExportRows());
+
+  // Row 1–6: title, month, blank, column totals, group labels, headers
+  const title = blank(); title[C('B')] = 'ARENACLUB'; title[C('BH')] = 'Summary - Sanity Check';
+  const month = blank(); month[C('B')] = 'MONTH END:'; month[C('D')] = `${MONTH_NAMES[currentMonth]} ${currentYear}`;
+  const groups = blank();
+  groups[C('I')] = 'Variables & Bonuses';
+  groups[C('T')] = 'Special Working Holiday NO Additional PAY';
+  groups[C('V')] = 'Reference';
+  groups[C('W')] = 'Date:';
+  groups[C('BB')] = 'Totals';
+  const header = blank();
+  ['Employee Name', 'Position', 'Batch', 'Fixed', 'Internet Allowance',
+   'Absences', 'Special Task Rwd', 'Trainer Allow.', 'Night Diff.', 'Team Lead Bonus', 'Referral',
+   'Comping Bonus', 'PL Team Perf.', 'Performance Bonus', 'Variables BEFORE OT and HOLIDAY']
+    .forEach((h, i) => { header[C('D') + i] = h; });
+  header[C('T')] = 'Holiday Date'; header[C('U')] = 'Holiday Pay'; header[C('V')] = '1.5× Mult.';
+  for (let d = 1; d <= 31; d++) header[C('W') + d - 1] = ordinalDay(d);
+  header[C('BB')] = 'OT Total'; header[C('BC')] = 'Variables Total'; header[C('BD')] = 'GRAND TOTAL';
+  ['Employee Name', 'Basic', 'Internet Allowance', 'Absences', 'Night Differentials', 'Holiday',
+   'OT Total', 'Variables Total', 'Grand Total', 'Deductions', 'Net Total'].forEach((h, i) => { header[C('BH') + i] = h; });
+
+  // Employee rows
+  const sums = { basic: 0, internet: 0, holidayPay: 0, ot: 0, absences: 0 };
+  BONUS_KEYS.forEach(k => { sums[k] = 0; });
+  const body = m.ordered.map(({ row, batch, code }, idx) => {
+    const r = blank();
+    const basic = parseNum(row.basic), internet = parseNum(row.internet);
+    const absences = parseNum(row.absences);
+    const bonuses = BONUS_KEYS.reduce((s, k) => s + parseNum(row[k]), 0);
+    const variablesBefore = bonuses - absences;          // the sheet subtracts absences ("LESS: ABSENCES")
+    const holidayPay = 0;                                 // not tracked in the app
+    const otTotal = (row.ot || []).slice(0, MONTH_DAYS).reduce((s, v) => s + parseNum(v), 0);
+    const variablesTotal = variablesBefore + holidayPay;
+    const grand = basic + internet + otTotal + variablesTotal;
+    const deductions = 0;
+
+    sums.basic += basic; sums.internet += internet; sums.absences += absences; sums.ot += otTotal;
+    BONUS_KEYS.forEach(k => { sums[k] += parseNum(row[k]); });
+
+    r[C('B')] = code;
+    r[C('C')] = idx + 1;
+    r[C('D')] = row.name;
+    r[C('E')] = row.position || '';
+    r[C('F')] = `${batch.name} · ${periodTag}`;
+    r[C('G')] = input(basic);
+    r[C('H')] = input(internet);
+    VAR_COLS.forEach((k, i) => { r[C('I') + i] = input(row[k]); });
+    r[C('R')] = calc(variablesBefore);
+    r[C('T')] = row.holiday || '';
+    r[C('U')] = calc(holidayPay);
+    r[C('V')] = calc(row.mult15x);
+    for (let d = 1; d <= MONTH_DAYS; d++) r[C('W') + d - 1] = input((row.ot || [])[d - 1]);
+    r[C('BB')] = calc(otTotal);
+    r[C('BC')] = calc(variablesTotal);
+    r[C('BD')] = calc(grand);
+    // Summary - Sanity Check
+    r[C('BH')] = row.name;
+    r[C('BI')] = input(basic);
+    r[C('BJ')] = input(internet);
+    r[C('BK')] = input(absences);
+    r[C('BL')] = input(row.nightDiff);
+    r[C('BM')] = calc(holidayPay);
+    r[C('BN')] = calc(otTotal);
+    r[C('BO')] = calc(variablesTotal);
+    r[C('BP')] = calc(grand);
+    r[C('BQ')] = deductions ? r2(deductions) : '';
+    r[C('BR')] = calc((grand - deductions) / 2);
+    return r;
+  });
+
+  const colSum = c => r2(body.reduce((s, r) => s + (typeof r[c] === 'number' ? r[c] : 0), 0));
+
+  // Row 4: column totals above the headers
+  const totals = blank();
+  for (let c = C('I'); c <= C('Q'); c++) totals[c] = colSum(c);
+  totals[C('U')] = colSum(C('U'));
+  totals[C('V')] = colSum(C('V'));
+  for (let c = C('W'); c <= C('BC'); c++) totals[c] = colSum(c);
+
+  // TOTAL row under the employees
+  const totalRow = blank();
+  totalRow[C('E')] = 'TOTAL:';
+  for (let c = C('G'); c <= C('R'); c++) totalRow[c] = colSum(c);
+  totalRow[C('S')] = '';
+  totalRow[C('U')] = colSum(C('U'));
+  for (let c = C('W'); c <= C('BD'); c++) totalRow[c] = colSum(c);
+  totalRow[C('BH')] = 'TOTAL:';
+  for (let c = C('BK'); c <= C('BR'); c++) totalRow[c] = colSum(c);
+
+  // A. TOTAL SUMMARY block (labels in D, amounts in E; side totals in G/H → I)
+  const subTotal = sums.basic + sums.internet + BONUS_KEYS.reduce((s, k) => s + sums[k], 0) + 0 + sums.ot;
+  const variablesOnly = BONUS_KEYS.filter(k => k !== 'nightDiff').reduce((s, k) => s + sums[k], 0);
+  const summaryLines = [
+    ['A. TOTAL SUMMARY', ''],
+    ['Basic', sums.basic],
+    ['Internet Allowance', sums.internet, ['G', 'TOTAL ND', sums.nightDiff]],
+    ['Night Diff.', sums.nightDiff, ['G', 'TOTAL OT', sums.ot]],
+    ['Special Task Rwd', sums.specialTask, ['G', 'TOTAL HOLIDAY', 0]],
+    ['Trainer Allow.', sums.trainerAllow, ['G', 'TOTAL VARIABLES', variablesOnly]],
+    ['Team Lead Bonus', sums.teamLead, ['G', '', sums.nightDiff + sums.ot + 0 + variablesOnly]],
+    ['Referral', sums.referral, ['H', 'LESS: ABSENCES', sums.absences]],
+    ['Comping Bonus', sums.compingBonus, ['H', 'BASIC + INTERNET ALLOW.', sums.basic + sums.internet]],
+    ['PL Team Perf.', sums.plTeamPerf],
+    ['Performance Bonus', sums.perfBonus],
+    ['Holiday Pay', 0],
+    ['OVERTIME', sums.ot],
+    ['SUB-TOTAL:', subTotal],
+    ['LESS: ABSENCES', sums.absences],
+    ['GRAND TOTAL :', subTotal - sums.absences],
+  ].map(([label, val, side]) => {
+    const r = blank();
+    r[C('D')] = label;
+    if (val !== '') r[C('E')] = r2(val);
+    if (side) { if (side[1]) r[C(side[0])] = side[1]; r[C('I')] = r2(side[2]); }
+    return r;
+  });
+
+  return {
+    rows: [title, month, blank(), totals, groups, header, ...body, blank(), blank(), totalRow, blank(), blank(), ...summaryLines],
+    matched: m.matched, extra: m.extra.length,
+  };
+}
+
 async function exportCSV() {
   try {
-    const data = buildSheetData();
-    const csv = data.rows.map(r => r.map(cell => {
+    if (!exportOrder) await loadExportOrder();
+    const data = buildSheetCsvRows();
+    const csv = '\uFEFF' + data.rows.map(r => r.map(cell => {
       const s = String(cell ?? '');
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    }).join(',')).join('\n');
+    }).join(',')).join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     await __saveFile(`payroll-${MONTH_LABEL.toLowerCase()}-${currentYear}.csv`, blob);
-    showToast('CSV exported', 'success');
+    closeExportCsv();
+    showToast(`CSV exported in sheet layout${data.extra ? ` · ${data.extra} new to the sheet` : ''}`, 'success');
   } catch (err) {
     console.error('CSV export failed:', err);
     showToast('CSV export failed: ' + err.message, 'error');
